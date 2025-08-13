@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import time
 from collections import Counter
+from urllib.parse import urlparse
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -74,24 +75,43 @@ class NewsSummarizerBot:
         return None
     
     def identify_source_column(self, df: pd.DataFrame) -> Optional[str]:
-        """Identify the source/publisher column from the dataframe"""
+        """Identify the source/publisher column from the dataframe, including URL columns"""
+        # Traditional source column candidates
         source_column_candidates = [
             'source', 'publisher', 'publication', 'outlet', 'provider',
             'news_source', 'media_source', 'author', 'site', 'website'
         ]
         
-        # Check for exact matches first
+        # URL column candidates
+        url_column_candidates = [
+            'url', 'link', 'href', 'web_url', 'article_url', 'source_url'
+        ]
+        
+        # Check for exact matches with traditional source columns first
         for col in df.columns:
             if col.lower() in source_column_candidates:
                 return col
         
-        # Check for partial matches
+        # Check for partial matches with traditional source columns
         for col in df.columns:
             for candidate in source_column_candidates:
                 if candidate in col.lower():
                     return col
         
-        logger.info("No source column found")
+        # Check for URL columns
+        for col in df.columns:
+            if col.lower() in url_column_candidates:
+                logger.info(f"Found URL column '{col}' - will extract sources from URLs")
+                return col
+        
+        # Check for partial matches with URL columns
+        for col in df.columns:
+            for candidate in url_column_candidates:
+                if candidate in col.lower():
+                    logger.info(f"Found URL-like column '{col}' - will extract sources from URLs")
+                    return col
+        
+        logger.info("No source or URL column found")
         return None
     
     def identify_date_column(self, df: pd.DataFrame) -> Optional[str]:
@@ -236,6 +256,152 @@ class NewsSummarizerBot:
         
         return ticker_to_company.get(ticker.upper(), '')
 
+    def extract_source_from_url(self, url: str) -> str:
+        """Extract and clean source name from URL"""
+        if pd.isna(url) or not url:
+            return ""
+        
+        url = str(url).strip()
+        
+        try:
+            # Parse the URL to get the domain
+            if not url.startswith(('http://', 'https://')):
+                url = 'https://' + url
+            
+            parsed = urlparse(url)
+            domain = parsed.netloc.lower()
+            
+            # Remove www. prefix
+            if domain.startswith('www.'):
+                domain = domain[4:]
+            
+            # Comprehensive domain mapping for news sources
+            domain_mapping = {
+                # Financial News
+                'reuters.com': 'Reuters',
+                'bloomberg.com': 'Bloomberg',
+                'wsj.com': 'Wall Street Journal',
+                'ft.com': 'Financial Times',
+                'cnbc.com': 'CNBC',
+                'marketwatch.com': 'MarketWatch',
+                'yahoo.com': 'Yahoo Finance',
+                'finance.yahoo.com': 'Yahoo Finance',
+                'fool.com': 'Motley Fool',
+                'seekingalpha.com': 'Seeking Alpha',
+                'benzinga.com': 'Benzinga',
+                'zacks.com': 'Zacks',
+                'morningstar.com': 'Morningstar',
+                'barrons.com': 'Barrons',
+                'investopedia.com': 'Investopedia',
+                'thestreet.com': 'TheStreet',
+                'forbes.com': 'Forbes',
+                'fortune.com': 'Fortune',
+                'businessinsider.com': 'Business Insider',
+                
+                # General News
+                'cnn.com': 'CNN',
+                'bbc.com': 'BBC',
+                'npr.org': 'NPR',
+                'apnews.com': 'Associated Press',
+                'ap.org': 'Associated Press',
+                'usatoday.com': 'USA Today',
+                'nytimes.com': 'New York Times',
+                'washingtonpost.com': 'Washington Post',
+                'guardian.co.uk': 'The Guardian',
+                'theguardian.com': 'The Guardian',
+                'economist.com': 'The Economist',
+                'axios.com': 'Axios',
+                'politico.com': 'Politico',
+                'abc.com': 'ABC News',
+                'cbsnews.com': 'CBS News',
+                'nbcnews.com': 'NBC News',
+                'foxnews.com': 'Fox News',
+                'consent.yahoo.com':' Yahoo Consent',
+                'slashdot.org': 'Slashdot',
+                'nbcnews.com': 'NBC News',
+                'doope.jp': 'Doope',
+                'zdnet.com': 'ZDNet',
+                'biztoc.com': 'BizToc',
+                'bbc.com': 'BBC',
+                'bbc.com': 'BBC',
+                'ibtimes.com': 'International Business Times',
+                'biztoc.com': 'BizToc',
+                'economictimes.indiatimes.com': 'Economic Times',
+                'macobserver.com': 'Mac Observer',
+'               commonsensewithmoney.com': 'Common Sense With Money',
+                'ibtimes.com': 'International Business Times',
+                'digitaljournal.com': 'Digital Journal',
+                'japantoday.com': 'Japan Today',
+                'globenewswire.com': 'GlobeNewswire',
+                'zdnet.com': 'ZDNet',
+                'timesofindia.indiatimes.com': 'Times of India',
+                'hkcert.org': 'Hong Kong Computer Emergency Response Team',
+                'variety.com': 'Variety',
+                'finovate.com': 'Finovate',
+
+                
+                # Tech News
+                'techcrunch.com': 'TechCrunch',
+                'venturebeat.com': 'VentureBeat',
+                'theverge.com': 'The Verge',
+                'arstechnica.com': 'Ars Technica',
+                'engadget.com': 'Engadget',
+                'wired.com': 'Wired',
+                'mashable.com': 'Mashable',
+                'gizmodo.com': 'Gizmodo',
+                
+                # Aggregators and Others
+                'biztoc.com': 'BizToc',
+                'reddit.com': 'Reddit',
+                'slashdot.org': 'Slashdot',
+                'news.ycombinator.com': 'Hacker News',
+                'digitimes.com': 'DigiTimes',
+                'phoronix.com': 'Phoronix',
+                'newsshooter.com': 'NewsShooter',
+                'applech2.com': 'AppleCH2',
+                'touchlab.jp': 'TouchLab',
+                'notebookcheck.net': 'NotebookCheck',
+                'ozbargain.com.au': 'OzBargain',
+                'autoblog.com': 'Autoblog',
+                'twistedsifter.com': 'TwistedSifter',
+                'bookriot.com': 'BookRiot',
+                'activistpost.com': 'Activist Post',
+                'indianexpress.com': 'Indian Express',
+                'livemint.com': 'LiveMint',
+                '7news.com.au': '7News Australia',
+                'variety.com': 'Variety',
+                'foxsports.com': 'Fox Sports',
+                
+                # Government and Official
+                'sec.gov': 'SEC',
+                'edgar.sec.gov': 'SEC EDGAR'
+            }
+            
+            # Check if domain is in our mapping
+            clean_name = domain_mapping.get(domain)
+            if clean_name:
+                return clean_name
+            
+            # For unmapped domains, create a clean name
+            # Remove common TLDs and format nicely
+            name_parts = domain.split('.')
+            if len(name_parts) >= 2:
+                name_part = name_parts[0]
+                
+                # Handle special cases like finance.yahoo.com
+                if name_part in ['finance', 'money', 'news', 'business'] and len(name_parts) > 2:
+                    name_part = name_parts[1]
+                
+                # Clean up the name
+                name_part = name_part.replace('-', ' ').replace('_', ' ')
+                return name_part.title()
+            
+            return domain.replace('.com', '').replace('.org', '').replace('.net', '').title()
+            
+        except Exception as e:
+            logger.warning(f"Failed to extract source from URL '{url}': {str(e)}")
+            return "Unknown Source"
+
     def clean_source_name(self, source: str) -> str:
         """Clean and extract source name from URL or full name"""
         if pd.isna(source) or not source:
@@ -243,84 +409,11 @@ class NewsSummarizerBot:
         
         source = str(source).strip()
         
-        # If it's a URL, extract the domain
-        if source.startswith(('http://', 'https://', 'www.')):
-            try:
-                from urllib.parse import urlparse
-                parsed = urlparse(source if source.startswith('http') else 'http://' + source)
-                domain = parsed.netloc.lower()
-                
-                # Remove www. prefix
-                if domain.startswith('www.'):
-                    domain = domain[4:]
-                
-                # Map common domains to clean names
-                domain_mapping = {
-                    'reuters.com': 'Reuters',
-                    'bloomberg.com': 'Bloomberg',
-                    'wsj.com': 'Wall Street Journal',
-                    'ft.com': 'Financial Times',
-                    'cnbc.com': 'CNBC',
-                    'cnn.com': 'CNN',
-                    'bbc.com': 'BBC',
-                    'marketwatch.com': 'MarketWatch',
-                    'yahoo.com': 'Yahoo Finance',
-                    'finance.yahoo.com': 'Yahoo Finance',
-                    'fool.com': 'Motley Fool',
-                    'seekingalpha.com': 'Seeking Alpha',
-                    'benzinga.com': 'Benzinga',
-                    'zacks.com': 'Zacks',
-                    'morningstar.com': 'Morningstar',
-                    'barrons.com': 'Barrons',
-                    'investopedia.com': 'Investopedia',
-                    'thestreet.com': 'TheStreet',
-                    'forbes.com': 'Forbes',
-                    'fortune.com': 'Fortune',
-                    'businessinsider.com': 'Business Insider',
-                    'techcrunch.com': 'TechCrunch',
-                    'venturebeat.com': 'VentureBeat',
-                    'theverge.com': 'The Verge',
-                    'arstechnica.com': 'Ars Technica',
-                    'engadget.com': 'Engadget',
-                    'wired.com': 'Wired',
-                    'npr.org': 'NPR',
-                    'apnews.com': 'Associated Press',
-                    'ap.org': 'Associated Press',
-                    'usatoday.com': 'USA Today',
-                    'nytimes.com': 'New York Times',
-                    'washingtonpost.com': 'Washington Post',
-                    'guardian.co.uk': 'The Guardian',
-                    'theguardian.com': 'The Guardian',
-                    'economist.com': 'The Economist',
-                    'axios.com': 'Axios',
-                    'politico.com': 'Politico',
-                    'sec.gov': 'SEC',
-                    'edgar.sec.gov': 'SEC EDGAR'
-                }
-                
-                clean_name = domain_mapping.get(domain)
-                if clean_name:
-                    return clean_name
-                
-                # If not in mapping, try to create a clean name from domain
-                # Remove common TLDs and format nicely
-                name_part = domain.split('.')[0]
-                if name_part in ['finance', 'money', 'news', 'business']:
-                    # Handle cases like finance.yahoo.com
-                    parts = domain.split('.')
-                    if len(parts) > 1:
-                        name_part = parts[1]
-                
-                return name_part.title()
-                
-            except Exception:
-                # If URL parsing fails, continue with original source
-                pass
+        # If it looks like a URL, extract the source from it
+        if any(indicator in source.lower() for indicator in ['http://', 'https://', 'www.', '.com', '.org', '.net']):
+            return self.extract_source_from_url(source)
         
-        # Clean up common source name patterns
-        source = source.replace('www.', '').replace('.com', '').replace('http://', '').replace('https://', '')
-        
-        # Handle common news source formats
+        # Otherwise, clean up the source name as before
         source_mapping = {
             'wsj': 'Wall Street Journal',
             'ft': 'Financial Times',
@@ -371,6 +464,10 @@ class NewsSummarizerBot:
             elif 'ticker' in col_lower or 'symbol' in col_lower:
                 if not df[col].isna().all():
                     company_info['ticker'] = str(df[col].iloc[0]).upper()
+        
+        # Check for 'Ticker' column specifically (as in your data)
+        if 'Ticker' in df.columns and not df['Ticker'].isna().all():
+            company_info['ticker'] = str(df['Ticker'].iloc[0]).upper()
         
         # If ticker found, get proper company name
         if company_info['ticker'] and not company_info['company_name']:
@@ -447,7 +544,7 @@ class NewsSummarizerBot:
         if source_column not in df.columns:
             return []
         
-        # Clean all source names
+        # Clean all source names (handles both URLs and regular source names)
         cleaned_sources = df[source_column].dropna().apply(self.clean_source_name)
         
         # Remove empty sources
@@ -632,7 +729,7 @@ class NewsSummarizerBot:
         
         logger.info(f"Using column '{text_column}' as text source")
         if source_column:
-            logger.info(f"Using column '{source_column}' as source")
+            logger.info(f"Using column '{source_column}' as source (will extract from URLs if applicable)")
         if date_column:
             logger.info(f"Using column '{date_column}' as date")
         
