@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 class NewsSummarizerBot:
     def __init__(self, api_key: str):
-        """Initialize the news summarizer bot with OpenAI API key"""
+        """Initialize the content summarizer bot with OpenAI API key"""
         openai.api_key = api_key
         self.client = openai.OpenAI(api_key=api_key)
         
@@ -44,10 +44,11 @@ class NewsSummarizerBot:
     
     def identify_text_column(self, df: pd.DataFrame) -> Optional[str]:
         """Identify the text column from the dataframe"""
-        # Common text column names
+        # Common text column names for various platforms
         text_column_candidates = [
             'text', 'content', 'news', 'article', 'description', 
-            'summary', 'body', 'message', 'title', 'headline'
+            'summary', 'body', 'message', 'title', 'headline',
+            'post', 'comment', 'tweet', 'caption', 'story'
         ]
         
         # Check for exact matches first
@@ -79,7 +80,8 @@ class NewsSummarizerBot:
         # Traditional source column candidates
         source_column_candidates = [
             'source', 'publisher', 'publication', 'outlet', 'provider',
-            'news_source', 'media_source', 'author', 'site', 'website'
+            'news_source', 'media_source', 'author', 'site', 'website',
+            'platform', 'channel', 'subreddit', 'domain'
         ]
         
         # URL column candidates
@@ -118,7 +120,8 @@ class NewsSummarizerBot:
         """Identify the date column from the dataframe"""
         date_column_candidates = [
             'date', 'time', 'timestamp', 'published', 'created',
-            'pub_date', 'publish_date', 'datetime', 'created_at'
+            'pub_date', 'publish_date', 'datetime', 'created_at',
+            'posted', 'updated', 'modified'
         ]
         
         # Check for exact matches first
@@ -275,7 +278,7 @@ class NewsSummarizerBot:
             if domain.startswith('www.'):
                 domain = domain[4:]
             
-            # Comprehensive domain mapping for news sources
+            # Comprehensive domain mapping for various platforms
             domain_mapping = {
                 # Financial News
                 'reuters.com': 'Reuters',
@@ -316,44 +319,50 @@ class NewsSummarizerBot:
                 'cbsnews.com': 'CBS News',
                 'nbcnews.com': 'NBC News',
                 'foxnews.com': 'Fox News',
-                'consent.yahoo.com':' Yahoo Consent',
+                'consent.yahoo.com': 'Yahoo Consent',
                 'slashdot.org': 'Slashdot',
-                'nbcnews.com': 'NBC News',
                 'doope.jp': 'Doope',
                 'zdnet.com': 'ZDNet',
                 'biztoc.com': 'BizToc',
-                'bbc.com': 'BBC',
-                'bbc.com': 'BBC',
                 'ibtimes.com': 'International Business Times',
-                'biztoc.com': 'BizToc',
                 'economictimes.indiatimes.com': 'Economic Times',
                 'macobserver.com': 'Mac Observer',
-'               commonsensewithmoney.com': 'Common Sense With Money',
-                'ibtimes.com': 'International Business Times',
+                'commonsensewithmoney.com': 'Common Sense With Money',
                 'digitaljournal.com': 'Digital Journal',
                 'japantoday.com': 'Japan Today',
                 'globenewswire.com': 'GlobeNewswire',
-                'zdnet.com': 'ZDNet',
                 'timesofindia.indiatimes.com': 'Times of India',
                 'hkcert.org': 'Hong Kong Computer Emergency Response Team',
                 'variety.com': 'Variety',
                 'finovate.com': 'Finovate',
-
                 
                 # Tech News
                 'techcrunch.com': 'TechCrunch',
                 'venturebeat.com': 'VentureBeat',
                 'theverge.com': 'The Verge',
-                'arstechnica.com': 'Ars Technica',
+                'ars-technica.com': 'Ars Technica',
                 'engadget.com': 'Engadget',
                 'wired.com': 'Wired',
                 'mashable.com': 'Mashable',
                 'gizmodo.com': 'Gizmodo',
                 
-                # Aggregators and Others
-                'biztoc.com': 'BizToc',
+                # Social Media and Forums
                 'reddit.com': 'Reddit',
-                'slashdot.org': 'Slashdot',
+                'twitter.com': 'Twitter',
+                'x.com': 'X (Twitter)',
+                'facebook.com': 'Facebook',
+                'instagram.com': 'Instagram',
+                'linkedin.com': 'LinkedIn',
+                'youtube.com': 'YouTube',
+                'tiktok.com': 'TikTok',
+                'discord.com': 'Discord',
+                'telegram.org': 'Telegram',
+                'whatsapp.com': 'WhatsApp',
+                'snapchat.com': 'Snapchat',
+                'pinterest.com': 'Pinterest',
+                'tumblr.com': 'Tumblr',
+                
+                # Aggregators and Others
                 'news.ycombinator.com': 'Hacker News',
                 'digitimes.com': 'DigiTimes',
                 'phoronix.com': 'Phoronix',
@@ -369,7 +378,6 @@ class NewsSummarizerBot:
                 'indianexpress.com': 'Indian Express',
                 'livemint.com': 'LiveMint',
                 '7news.com.au': '7News Australia',
-                'variety.com': 'Variety',
                 'foxsports.com': 'Fox Sports',
                 
                 # Government and Official
@@ -497,10 +505,10 @@ class NewsSummarizerBot:
     def extract_company_from_text(self, text: str) -> Dict[str, str]:
         """Use AI to extract company name and ticker from text"""
         prompt = f"""
-        From the following news text, extract the main company name and stock ticker symbol (if mentioned).
+        From the following content (which may include news articles, social media posts, or discussions), extract the main company name and stock ticker symbol (if mentioned).
         Return only the company name and ticker, or "Not found" if not clearly identifiable.
         
-        Text: {text}
+        Content: {text}
         
         Please respond in this exact format:
         Company: [company name or "Not found"]
@@ -511,7 +519,7 @@ class NewsSummarizerBot:
             response = self.client.chat.completions.create(
                 model="gpt-4",
                 messages=[
-                    {"role": "system", "content": "You are an expert at extracting company information from financial news text."},
+                    {"role": "system", "content": "You are an expert at extracting company information from various types of content including news articles, social media posts, and financial discussions."},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=100,
@@ -540,7 +548,7 @@ class NewsSummarizerBot:
             return {'company_name': '', 'ticker': ''}
     
     def get_top_sources(self, df: pd.DataFrame, source_column: str, top_n: int = 5) -> List[Tuple[str, int]]:
-        """Get top N news sources from the dataset with cleaned names"""
+        """Get top N content sources from the dataset with cleaned names"""
         if source_column not in df.columns:
             return []
         
@@ -576,7 +584,7 @@ class NewsSummarizerBot:
             return {'start_date': '', 'end_date': ''}
     
     def summarize_single_text(self, text: str, max_retries: int = 3) -> str:
-        """Summarize a single news item using GPT-4"""
+        """Summarize a single content item using GPT-4"""
         if not text or pd.isna(text):
             return "No content to summarize"
         
@@ -586,7 +594,7 @@ class NewsSummarizerBot:
             return text
         
         prompt = f"""
-        Please provide a concise summary of the following news article in 2-3 sentences, focusing on the key facts and implications:
+        Please provide a concise summary of the following content in 2-3 sentences, focusing on the key facts and implications:
         
         {text}
         
@@ -598,7 +606,7 @@ class NewsSummarizerBot:
                 response = self.client.chat.completions.create(
                     model="gpt-4",
                     messages=[
-                        {"role": "system", "content": "You are a professional news summarizer. Provide clear, concise, and factual summaries."},
+                        {"role": "system", "content": "You are a professional content summarizer. Provide clear, concise, and factual summaries of news articles, social media posts, and other text content."},
                         {"role": "user", "content": prompt}
                     ],
                     max_tokens=150,
@@ -606,7 +614,7 @@ class NewsSummarizerBot:
                 )
                 
                 summary = response.choices[0].message.content.strip()
-                logger.info(f"Successfully summarized text (attempt {attempt + 1})")
+                logger.info(f"Successfully summarized content (attempt {attempt + 1})")
                 return summary
                 
             except Exception as e:
@@ -646,14 +654,14 @@ class NewsSummarizerBot:
         context = " | ".join(context_parts) if context_parts else ""
         
         prompt = f"""
-        Based on the following individual news summaries{f' about {context}' if context else ''}, create a comprehensive overview in 2-3 paragraphs that captures the main themes, trends, and key developments:
+        Based on the following individual content summaries{f' about {context}' if context else ''}, create a comprehensive overview in 2-3 paragraphs that captures the main themes, trends, and key developments from various sources including news articles, social media posts, and other content:
         
         {combined_text}
         
         Please provide:
         1. A brief overview of the main topics/themes
         2. Key developments and their implications
-        3. Any notable trends or patterns
+        3. Any notable trends or patterns across different platforms and sources
         
         Overall Summary:
         """
@@ -662,7 +670,7 @@ class NewsSummarizerBot:
             response = self.client.chat.completions.create(
                 model="gpt-4",
                 messages=[
-                    {"role": "system", "content": "You are a senior news analyst. Provide comprehensive yet concise analysis of multiple news items, identifying patterns and key themes."},
+                    {"role": "system", "content": "You are a senior content analyst. Provide comprehensive yet concise analysis of multiple content items from various sources including traditional media, social media platforms, and online discussions, identifying patterns and key themes."},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=500,
@@ -679,7 +687,7 @@ class NewsSummarizerBot:
     
     def create_document_title(self, metadata: Dict[str, Any]) -> str:
         """Create a formatted document title with company info, ticker, date and item count"""
-        title_parts = ["News Summary"]
+        title_parts = ["Content Summary"]
         
         if metadata.get('company_name'):
             title_parts.append(f"- {metadata['company_name']}")
@@ -695,7 +703,7 @@ class NewsSummarizerBot:
                 title_parts.append(f"- {date_range['start_date']} to {date_range.get('end_date', '')}")
         
         if metadata.get('processed_items'):
-            title_parts.append(f"- {metadata['processed_items']} News Items")
+            title_parts.append(f"- {metadata['processed_items']} Content Items")
         
         return " ".join(title_parts)
     
@@ -704,14 +712,14 @@ class NewsSummarizerBot:
         if not top_sources:
             return "No source information available."
         
-        sources_text = "Top News Sources:\n"
+        sources_text = "Top Content Sources:\n"
         for i, (source, count) in enumerate(top_sources, 1):
-            sources_text += f"{i}. {source} ({count} articles)\n"
+            sources_text += f"{i}. {source} ({count} items)\n"
         
         return sources_text
     
     def process_news_file(self, file_path: str, output_dir: str = "output") -> Dict[str, Any]:
-        """Main method to process news file and generate summaries"""
+        """Main method to process content file and generate summaries"""
         logger.info(f"Starting processing of file: {file_path}")
         
         # Load the file
@@ -745,7 +753,7 @@ class NewsSummarizerBot:
         summaries = []
         original_texts = df[text_column].tolist()
         
-        logger.info(f"Processing {len(original_texts)} news items...")
+        logger.info(f"Processing {len(original_texts)} content items...")
         
         for i, text in enumerate(original_texts):
             logger.info(f"Processing item {i+1}/{len(original_texts)}")
@@ -776,7 +784,7 @@ class NewsSummarizerBot:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
         # Create filename based on company info
-        filename_parts = ["news_summaries"]
+        filename_parts = ["content_summaries"]
         if company_info['company_name']:
             clean_name = "".join(c for c in company_info['company_name'] if c.isalnum() or c in (' ', '-', '_')).rstrip()
             filename_parts.append(clean_name.replace(' ', '_'))
@@ -809,7 +817,7 @@ class NewsSummarizerBot:
                     f.write(f"Date: {date_range['start_date']}\n")
                 else:
                     f.write(f"Date Range: {date_range['start_date']} to {date_range.get('end_date', '')}\n")
-            f.write(f"Total News Items: {len(summaries)}\n")
+            f.write(f"Total Content Items: {len(summaries)}\n")
             
             # Add top sources
             if top_sources:
@@ -863,5 +871,5 @@ if __name__ == "__main__":
     bot = NewsSummarizerBot(api_key)
     
     # Test with a sample file
-    # result = bot.process_news_file("sample_news.csv")
+    # result = bot.process_news_file("sample_content.csv")
     # print(json.dumps(result, indent=2))

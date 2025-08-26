@@ -6,13 +6,18 @@ from pathlib import Path
 import json
 from datetime import datetime
 import sys
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
+import re
 
 # Import the backend module
 from backend import NewsSummarizerBot, get_available_columns
 
 # Configure Streamlit page
 st.set_page_config(
-    page_title="News Summarizer Bot",
+    page_title="News and Social Media Summarizer Bot",
     page_icon="📰",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -26,10 +31,136 @@ def initialize_session_state():
         st.session_state.results = None
     if 'uploaded_file_name' not in st.session_state:
         st.session_state.uploaded_file_name = None
+    if 'email_sent' not in st.session_state:
+        st.session_state.email_sent = False
+
+def validate_email(email: str) -> bool:
+    """Validate email format"""
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    return re.match(pattern, email) is not None
 
 def validate_api_key(api_key: str) -> bool:
     """Validate OpenAI API key format"""
     return api_key.startswith('sk-') and len(api_key) > 20
+
+def send_results_via_email(email_address: str, results: dict, sender_email: str, sender_password: str) -> bool:
+    """Send summarization results via email"""
+    try:
+        # Email configuration
+        smtp_server = "smtp.gmail.com"
+        smtp_port = 587
+        
+        # Create message container
+        msg = MIMEMultipart()
+        msg['From'] = sender_email
+        msg['To'] = email_address
+        msg['Subject'] = f"📰 {results.get('document_title', 'Content Summary Report')}"
+        
+        # Create HTML email body
+        html_body = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 20px; }}
+                .header {{ background: linear-gradient(90deg, #1f77b4, #2e8b57); color: white; padding: 20px; border-radius: 10px; text-align: center; }}
+                .section {{ margin: 20px 0; padding: 15px; border-left: 4px solid #1f77b4; background-color: #f8f9fa; }}
+                .summary-box {{ background-color: #ffffff; padding: 20px; border-radius: 8px; border: 1px solid #ddd; margin: 15px 0; }}
+                .meta-info {{ display: flex; flex-wrap: wrap; gap: 20px; margin: 15px 0; }}
+                .meta-item {{ background: #e9ecef; padding: 10px; border-radius: 5px; min-width: 150px; }}
+                .sources {{ background: #f1f3f4; padding: 15px; border-radius: 5px; }}
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <h1>{results.get('document_title', 'Content Summary Report')}</h1>
+                <p>Generated on {datetime.now().strftime('%B %d, %Y at %I:%M %p')}</p>
+            </div>
+            
+            <div class="section">
+                <h2>📊 Summary Details</h2>
+                <div class="meta-info">
+        """
+        
+        # Add company information
+        company_info = results.get("company_info", {})
+        if company_info.get('company_name'):
+            html_body += f'<div class="meta-item"><strong>Company:</strong> {company_info["company_name"]}</div>'
+        if company_info.get('ticker'):
+            html_body += f'<div class="meta-item"><strong>Ticker:</strong> {company_info["ticker"]}</div>'
+        
+        # Add date range
+        date_range = results.get("date_range", {})
+        if date_range.get('start_date'):
+            if date_range['start_date'] == date_range.get('end_date', ''):
+                html_body += f'<div class="meta-item"><strong>Date:</strong> {date_range["start_date"]}</div>'
+            else:
+                html_body += f'<div class="meta-item"><strong>Date Range:</strong> {date_range["start_date"]} to {date_range.get("end_date", "")}</div>'
+        
+        html_body += f'<div class="meta-item"><strong>Items Processed:</strong> {results.get("processed_items", 0)}</div>'
+        html_body += '</div></div>'
+        
+        # Add top sources
+        top_sources = results.get("top_sources", [])
+        if top_sources:
+            html_body += '''
+            <div class="section">
+                <h2>📈 Top Content Sources</h2>
+                <div class="sources">
+            '''
+            for i, (source, count) in enumerate(top_sources, 1):
+                html_body += f'<p><strong>{i}. {source}</strong> - {count} items</p>'
+            html_body += '</div></div>'
+        
+        # Add overall summary
+        html_body += f'''
+        <div class="section">
+            <h2>📋 Overall Summary</h2>
+            <div class="summary-box">
+                {results.get("overall_summary", "No summary available").replace(chr(10), "<br>")}
+            </div>
+        </div>
+        '''
+        
+        # Add footer
+        html_body += '''
+        <div class="section" style="text-align: center; color: #666;">
+            <p>This summary was generated automatically by News and Social Media Summarizer Bot</p>
+            <p>📧 Results delivered to your inbox | 🤖 Powered by AI</p>
+        </div>
+        </body>
+        </html>
+        '''
+        
+        # Attach HTML body
+        msg.attach(MIMEText(html_body, 'html'))
+        
+        # Attach files if they exist
+        if "overall_summary_file" in results and os.path.exists(results["overall_summary_file"]):
+            with open(results["overall_summary_file"], "rb") as f:
+                attachment = MIMEApplication(f.read(), _subtype="txt")
+                attachment.add_header('Content-Disposition', 'attachment', 
+                                    filename=os.path.basename(results["overall_summary_file"]))
+                msg.attach(attachment)
+        
+        if "output_file" in results and os.path.exists(results["output_file"]):
+            with open(results["output_file"], "rb") as f:
+                attachment = MIMEApplication(f.read(), _subtype="csv")
+                attachment.add_header('Content-Disposition', 'attachment', 
+                                    filename=os.path.basename(results["output_file"]))
+                msg.attach(attachment)
+        
+        # Send email
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()
+        server.login(sender_email, sender_password)
+        server.send_message(msg)
+        server.quit()
+        
+        return True
+        
+    except Exception as e:
+        st.error(f"Failed to send email: {str(e)}")
+        return False
 
 def save_uploaded_file(uploaded_file, upload_dir: str = "uploads") -> str:
     """Save uploaded file to disk and return path"""
@@ -71,7 +202,7 @@ def display_processing_progress():
     progress_container = st.container()
     
     with progress_container:
-        st.info("🔄 Processing your news file...")
+        st.info("🔄 Processing your content file...")
         progress_bar = st.progress(0)
         status_text = st.empty()
         
@@ -84,7 +215,7 @@ def display_processing_progress():
             elif i < 30:
                 status_text.text("Identifying company information and sources...")
             elif i < 60:
-                status_text.text("Summarizing individual news items...")
+                status_text.text("Summarizing individual content items...")
             elif i < 90:
                 status_text.text("Creating overall summary with metadata...")
             else:
@@ -127,11 +258,11 @@ def display_company_info(results: dict):
         st.divider()
 
 def display_sources_info(results: dict):
-    """Display top news sources"""
+    """Display top content sources"""
     top_sources = results.get("top_sources", [])
     
     if top_sources:
-        st.subheader("📊 Top News Sources")
+        st.subheader("📊 Top Content Sources")
         
         # Create a more visual display of sources
         for i, (source, count) in enumerate(top_sources, 1):
@@ -139,7 +270,7 @@ def display_sources_info(results: dict):
             with col1:
                 st.write(f"**{i}. {source}**")
             with col2:
-                st.metric("Articles", count)
+                st.metric("Items", count)
         
         st.divider()
 
@@ -152,7 +283,7 @@ def display_results(results: dict):
     st.success("✅ Processing completed successfully!")
     
     # Display document title prominently
-    document_title = results.get("document_title", "News Summary Report")
+    document_title = results.get("document_title", "Content Summary Report")
     st.markdown(
         f"""
         <div style="
@@ -192,11 +323,11 @@ def display_results(results: dict):
     
     st.divider()
     
-    # Display top news sources
+    # Display top content sources
     display_sources_info(results)
     
     # Display overall summary
-    st.subheader("📋 Overall News Summary")
+    st.subheader("📋 Overall Content Summary")
     overall_summary = results.get("overall_summary", "No summary available")
     
     # Create a styled container for the summary
@@ -220,8 +351,75 @@ def display_results(results: dict):
     
     st.divider()
     
+    # Email delivery section
+    st.subheader("📧 Email Delivery")
+    
+    # Email configuration section
+    with st.expander("⚙️ Email Configuration (Required for sending)", expanded=not st.session_state.email_sent):
+        st.markdown("""
+        **To send emails, you need to configure SMTP settings:**
+        
+        📋 **For Gmail users:**
+        1. Enable 2-Factor Authentication on your Google account
+        2. Generate an App Password: [Google App Passwords](https://myaccount.google.com/apppasswords)
+        3. Use your Gmail address and the generated App Password below
+        
+        📋 **For other email providers:**
+        - Use your email provider's SMTP settings
+        """)
+        
+        email_col1, email_col2 = st.columns(2)
+        
+        with email_col1:
+            sender_email = st.text_input(
+                "📧 Your Email Address (sender):",
+                placeholder="your-email@gmail.com",
+                help="The email address that will send the results"
+            )
+        
+        with email_col2:
+            sender_password = st.text_input(
+                "🔑 Email App Password:",
+                type="password",
+                placeholder="App Password (not your regular password)",
+                help="For Gmail: Use App Password, not your regular password"
+            )
+    
+    if not st.session_state.email_sent:
+        if sender_email and sender_password:
+            email_col1, email_col2 = st.columns([2, 1])
+            
+            with email_col1:
+                user_email = st.text_input(
+                    "📬 Recipient Email Address:",
+                    placeholder="recipient@example.com",
+                    help="Where to send the summary results"
+                )
+            
+            with email_col2:
+                st.write("")  # Spacer
+                st.write("")  # Spacer
+                if st.button("📨 Send Results", type="primary", disabled=not user_email or not validate_email(user_email)):
+                    if validate_email(user_email):
+                        with st.spinner("Sending email..."):
+                            if send_results_via_email(user_email, results, sender_email, sender_password):
+                                st.success(f"✅ Results sent successfully to {user_email}!")
+                                st.session_state.email_sent = True
+                                st.rerun()
+                            else:
+                                st.error("❌ Failed to send email. Please check your credentials and try again.")
+                    else:
+                        st.error("Please enter a valid recipient email address")
+        else:
+            st.info("👆 Please configure your email settings above to send results via email.")
+    else:
+        st.success("✅ Results have been sent via email!")
+        if st.button("📧 Send to Different Email", type="secondary"):
+            st.session_state.email_sent = False
+            st.rerun()
+    
     # Display individual summaries
-    with st.expander("📑 View Individual Summaries", expanded=False):
+    with st.expander("🔍 View Individual Summaries", expanded=False):
         individual_summaries = results.get("individual_summaries", [])
         
         if individual_summaries:
@@ -286,7 +484,7 @@ def display_results(results: dict):
     
     # Additional download option for just the summary text
     if "overall_summary" in results:
-        with st.expander("📝 Additional Download Options"):
+        with st.expander("📎 Additional Download Options"):
             col1, col2 = st.columns(2)
             
             with col1:
@@ -315,7 +513,7 @@ def display_results(results: dict):
                 st.download_button(
                     label="📋 Download JSON Data",
                     data=json_data,
-                    file_name=f"news_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                    file_name=f"content_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
                     mime="application/json",
                     help="All results in structured JSON format"
                 )
@@ -325,8 +523,8 @@ def main():
     initialize_session_state()
     
     # App header
-    st.title("📰 News Summarizer Bot")
-    st.markdown("**AI-powered news summarization tool that processes your news data and creates both individual and overall summaries with company insights.**")
+    st.title("📰 News and Social Media Summarizer Bot")
+    st.markdown("**AI-powered content summarization tool that processes news articles, social media posts, and other text content to create both individual and overall summaries with company insights.**")
     
     st.divider()
     
@@ -380,14 +578,14 @@ def main():
                 selected_column = st.selectbox(
                     "Select text column",
                     options=columns,
-                    help="Choose the column containing news text"
+                    help="Choose the column containing text content"
                 )
                 
                 if len(columns) > 1:
                     source_column = st.selectbox(
                         "Select source column (optional)",
                         options=["Auto-detect"] + columns,
-                        help="Choose the column containing news sources"
+                        help="Choose the column containing content sources"
                     )
                     
                     date_column = st.selectbox(
@@ -406,26 +604,28 @@ def main():
             **Enhanced Features:**
             - Auto-detects text, source, and date columns
             - Extracts company name and ticker symbol
-            - Identifies top 5 news sources
+            - Identifies top 5 content sources
             - Analyzes date ranges
-            - Individual news summarization
+            - Individual content summarization
             - Overall theme analysis with metadata
             - Professional report generation
+            - **📧 Email delivery of results**
             
             **How it works:**
-            1. Upload your news file
+            1. Upload your content file (news, social media, etc.)
             2. Bot identifies content and metadata
             3. Extracts company information
-            4. Each news item is summarized
+            4. Each content item is summarized
             5. Overall summary with insights is generated
-            6. Download comprehensive reports
+            6. Results are emailed to you automatically
+            7. Download comprehensive reports
             """)
         
         # Enhanced file format guide
         with st.expander("📋 File Format Guide"):
             st.write("""
             **Required:**
-            - At least one column with news text content
+            - At least one column with text content
             
             **Optional but recommended:**
             - Source/Publisher column (e.g., 'source', 'publisher')
@@ -433,9 +633,9 @@ def main():
             - Company/Ticker columns
             
             **Example columns:**
-            - text, content, article, news
-            - source, publisher, outlet
-            - date, timestamp, published
+            - text, content, article, news, post, comment
+            - source, publisher, outlet, platform
+            - date, timestamp, published, created_at
             - company, ticker, symbol
             """)
     
@@ -456,19 +656,19 @@ def main():
         return
     
     if not uploaded_file:
-        st.info("👈 Please upload a news file to begin processing.")
+        st.info("👈 Please upload a content file to begin processing.")
         
         # Show enhanced example of expected file format
         with st.expander("📋 Expected File Format Examples"):
-            st.write("Your file should contain news text and optionally source/date information:")
+            st.write("Your file should contain text content and optionally source/date information:")
             
             example_data = {
                 'date': ['2024-01-15', '2024-01-15', '2024-01-16'],
-                'source': ['Reuters', 'Bloomberg', 'Financial Times'],
-                'headline': ['AAPL reports strong Q4', 'Apple sees growth', 'iPhone sales surge'],
+                'source': ['Reuters', 'Reddit', 'Financial Times'],
+                'headline': ['AAPL reports strong Q4', 'Apple sees growth discussion', 'iPhone sales surge'],
                 'text': [
                     'Apple Inc (AAPL) announced strong fourth quarter results with revenue up 15%...',
-                    'Apple reported impressive growth in its services division during Q4...',
+                    'User discussion on r/investing: Apple reported impressive growth in its services division during Q4...',
                     'iPhone sales surged 20% year-over-year, beating analyst expectations...'
                 ],
                 'company': ['Apple Inc', 'Apple Inc', 'Apple Inc'],
@@ -516,13 +716,13 @@ def main():
                 
                 # Processing button
                 if st.button("🚀 Start Processing", type="primary", use_container_width=True):
-                    with st.spinner("Processing your news file..."):
+                    with st.spinner("Processing your content file..."):
                         results = bot.process_news_file(file_path)
                         st.session_state.results = results
                         st.session_state.processing_complete = True
                         st.rerun()
             else:
-                st.error("❌ Could not identify a text column in your file. Please ensure your file contains a column with news text.")
+                st.error("❌ Could not identify a text column in your file. Please ensure your file contains a column with text content.")
                 
         except Exception as e:
             st.error(f"❌ Error processing file: {str(e)}")
@@ -538,11 +738,12 @@ def main():
                 st.session_state.processing_complete = False
                 st.session_state.results = None
                 st.session_state.uploaded_file_name = None
+                st.session_state.email_sent = False
                 st.rerun()
         
         with col2:
             if st.button("📤 Share Results", type="secondary", use_container_width=True):
-                st.info("💡 Use the download buttons above to save and share your results!")
+                st.info("💡 Enter your email above to receive results in your inbox!")
 
 if __name__ == "__main__":
     main()
